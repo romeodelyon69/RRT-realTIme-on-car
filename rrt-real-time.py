@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 """
 ESE 680
 RRT assignment
@@ -28,12 +30,12 @@ from std_msgs.msg import String
 from tf.transformations import euler_from_quaternion
 #from tf import transform_listener
 
-realCar = False
+realCar = True
 infinity = float('inf')
-DEPTH =60
-TEMPERATURE = 0.90
-ITERATION = 1000
-car_size = 0.60
+DEPTH = 20
+TEMPERATURE = 0.95
+ITERATION = 500
+car_size = 0.3
 STRAIGHT_LINE_COEFF = 0.3
 
 
@@ -42,12 +44,13 @@ if(realCar):
     lidarscan_topic = '/scan'
     loc_topic = '/pf/pose/odom'
     drive_topic = "/vesc/ackermann_cmd_mux/input/navigation"
-    file_path = '/home/nvidia/romeoNzt/wp-2025-02-07-13-04-47.csv'
+    file_path = '/home/nvidia/romeoNzt/wp-2025-02-14-12-49-57.csv'
 else:
     lidarscan_topic = '/scan'
     loc_topic = '/odom'
     drive_topic = '/nav'
-    file_path = '/home/romeo/rcws/logs/wp-2025-01-17-23-01-38.csv'
+    file_path = '/home/romeonzt/rcws/logs/wp-2025-02-14-12-49-57.csv'
+    
 
 
 
@@ -69,7 +72,7 @@ class Node(object):
 
         self.orientation = np.array([0,0])       #normalized vector representing the orientation of the robot at this point, based on the line between the parent and the node
 
-        self.bubbles = []   #On va découper la grille en une union (non disjointe) de disque de diamètre 2*self.neighboor_dist répartis sur une grille de maille neighboor_dist*neigboor_dist. On pourra ainsi optimiser la recherche des voisins puisqu'ils seront nécessairement dans les boules contenant le noeud
+        self.bubbles = []   #On va decouper la grille en une union (non disjointe) de disque de diametre 2*self.neighboor_dist repartis sur une grille de maille neighboor_dist*neigboor_dist. On pourra ainsi optimiser la recherche des voisins puisqu'ils seront necessairement dans les boules contenant le noeud
         self.neighboor = []
 
 
@@ -104,8 +107,8 @@ class RRT(object):
 
         # class attributes
         # TODO: maybe create your occupancy grid here
-        self.L = 0.5                #distance at which the samples are created from the nearest point in the tree
-        self.neighboor_dist = 0.7   #distance at which you consider two points are close enough to be linked
+        self.L = 0.4                #distance at which the samples are created from the nearest point in the tree
+        self.neighboor_dist = 0.6   #distance at which you consider two points are close enough to be linked
 
         self.gauche = 0
         self.droite = 0
@@ -121,6 +124,7 @@ class RRT(object):
 
         self.pose = Point()
         self.orientation = 0
+        self.is_orientation_up_to_date = False
 
         self.t = time.time()
         self.time_origin = time.time()
@@ -192,11 +196,11 @@ class RRT(object):
 
         self.have_launched_the_map = True
 
-        #on va donc pouvoir construire les bules dans le rectangle défini par les bords de la carte (self.gauche, haut, droite, bas)
+        #on va donc pouvoir construire les bules dans le rectangle defini par les bords de la carte (self.gauche, haut, droite, bas)
         w = int((self.droite - self.gauche) * self.occupancy_grid.info.resolution/(self.neighboor_dist)) + 1 + 1
         h = int((self.bas - self.haut) * self.occupancy_grid.info.resolution/(self.neighboor_dist)) + 1 + 1
         
-        #le upper corner est défini par haut et gauche 
+        #le upper corner est defini par haut et gauche 
         i = int(self.haut * self.occupancy_grid.info.resolution / (self.neighboor_dist))
         j = int(self.gauche * self.occupancy_grid.info.resolution / (self.neighboor_dist))
 
@@ -231,11 +235,28 @@ class RRT(object):
 
         #print(self.pose.x, self.pose.y)
         
-        if time.time() - self.t > 0.02:
+        if time.time() - self.t > 0.001:
             self.t = time.time()
             quaternion = np.array([pose_msg.pose.pose.orientation.x, pose_msg.pose.pose.orientation.y, pose_msg.pose.pose.orientation.z,pose_msg.pose.pose.orientation.w]) 
             angles = euler_from_quaternion(quaternion)
             self.orientation = angles[2]
+
+            self.is_orientation_up_to_date = True
+    
+    def add_obstacle(self, cell):
+        grid = self.local_grid.data
+        w = self.occupancy_grid.info.width
+        h = len(grid) // w
+
+        thickness = int(car_size // self.occupancy_grid.info.resolution)
+
+        ligne, colonne = divmod(cell, w)
+
+        for j in range(-thickness,thickness):
+            for k in range(-thickness + abs(j),thickness - abs(j)):
+                index = (ligne + j) * w + colonne + k
+                if index >= 0 and index < len(grid):
+                    grid[index] = 95
 
     def scan_callback(self, data):
         
@@ -246,16 +267,16 @@ class RRT(object):
                 angle = data.angle_min
                 
                 #takes perhaps to much time, esay improve : save the added points in a list and remove them one by one
-                
-                '''
-                self.erase_local_grid()
+                if self.is_orientation_up_to_date:
+                    self.erase_local_grid()
 
-                for dist in data.ranges:
-                    cell = self.cell_from_dist(dist, angle)
-                    angle += data.angle_increment
-                    if cell < len(self.local_grid.data) and cell > 0:
-                        self.local_grid.data[cell] = 100 
-                '''               
+                    for dist in data.ranges:
+                        cell = self.cell_from_dist(dist, angle)
+                        angle += data.angle_increment
+                        if cell < len(self.local_grid.data) and cell > 0:
+                            self.add_obstacle(cell)        
+
+                    self.is_orientation_up_to_date = False   
                 
                 self.next_waypoint()
 
@@ -279,24 +300,28 @@ class RRT(object):
         point = Point()
         point.x, point.y = self.pose.x + x, self.pose.y + y
 
+        printMarker(point.x,point.y,(1,1,0), random.randint(0,1000), self.marker_pub)
+
         return self.grid_pose_from_world_pose(point)
         
     def next_waypoint(self):
                 
         d = dist((self.pose.x, self.pose.y), (self.targetPoint.x, self.targetPoint.y))
 
-        if(d < self.L*12):
+        if(d < self.L*3):
             print("ON CHANGE DE POINT !!!!!!!!!!!!!!!!!!!!!!!!!!")
             self.targetPointIndex = (self.targetPointIndex + 1)
             if self.targetPointIndex >= len(self.waypoints):
                 self.targetPointIndex = 0
             self.targetPoint = self.waypoints[self.targetPointIndex]
-            self.next_waypoint()                                        #on vérifie que le nouveau point n'est pas trop proche du robot aussi
+            self.next_waypoint()                                        #on verifie que le nouveau point n'est pas trop proche du robot aussi
         
     
-    def erase_local_grid(self):
-        for i in range(len(self.occupancy_grid.data)):
-            self.local_grid.data[i] = 0
+    def erase_local_grid(self):                         #on efface les cases de la grille mais on se concentre sur celle où il y a le circuit uniquement 
+        for i in range(self.gauche, self.droite):
+            for j in range(self.haut, self.bas):
+                grid_index = i * self.occupancy_grid.info.width + j
+                self.local_grid.data[grid_index] = 0
 
     def find_shortest_path(self, start_point, end_point, START_ID):
 
@@ -339,7 +364,7 @@ class RRT(object):
         tree.append(origin_node)
         #print("origin_node : ", origin_node.x, origin_node.y, origin_node.x_grid, origin_node.y_grid)
 
-        #on doit ajouter le noeud à la liste des bubbles de la grille qui contiennet bien le point
+        #on doit ajouter le noeud a la liste des bubbles de la grille qui contiennet bien le point
         temps = time.time()
         x, y = origin_node.x, origin_node.y
         i,j = int((y - self.occupancy_grid.info.origin.position.y)/(self.neighboor_dist)), int((x - self.occupancy_grid.info.origin.position.x)/(self.neighboor_dist))
@@ -365,10 +390,10 @@ class RRT(object):
             #printMarker(0,0,(0,1,1), 12345678, self.marker_pub)
             printMarker(goal_x,goal_y,(0,1,1), 123456789, self.marker_pub)
             #print(len(tree))
-            if t < len(self.curent_path):           #on va essayer de suivre le chemin déjà calculé
+            if t < len(self.curent_path):           #on va essayer de suivre le chemin deja calcule
                 new_node = self.curent_path[t]
             else:
-                if(t == ITERATION-1):                                   #on termine toujours par le but pour recalculer si un meilleur chemin a été trouver depuis la dernière fois
+                if(t == ITERATION-1):                                   #on termine toujours par le but pour recalculer si un meilleur chemin a ete trouver depuis la derniere fois
                     sample_point = self.sample(0, goal_x, goal_y)
                 else:
                     sample_point = self.sample(TEMPERATURE, goal_x, goal_y)
@@ -383,7 +408,7 @@ class RRT(object):
             '''print("on a un nouveau noeud : ", new_node.x, new_node.y)'''
 
             if(self.check_collision(nearest_node, new_node)):
-                #on doit ajouter le noeud à la liste des bubbles de la grille qui contiennet bien le point
+                #on doit ajouter le noeud a la liste des bubbles de la grille qui contiennet bien le point
                 x, y = new_node.x, new_node.y
                 w = len(self.bubbles_list[0])
                 h = len(self.bubbles_list)
@@ -399,7 +424,7 @@ class RRT(object):
                             d = dist((bubleX, bubleY), (new_node.x, new_node.y))
                             '''print("distance entre le point et la boule : ", d)'''
                             if d < 2*self.neighboor_dist:
-                                '''print("on a ajouté un noeud à la boule : ", i+k, j+l)'''
+                                '''print("on a ajoute un noeud a la boule : ", i+k, j+l)'''
                                 new_node.bubbles.append(self.bubbles_list[i+k][j+l])
                                 self.bubbles_list[i+k][j+l].append(new_node)
 
@@ -433,11 +458,11 @@ class RRT(object):
                 self.nb_rewiring += 1
                 self.rewire(new_node, tree, 0)
                 self.total_time_rewiring += (time.time() - temps)
-                rospy.loginfo_throttle(0.5,"le temps moyen des fonctions rewiring sur une itération est de : " + str(self.total_time_rewiring / self.nb_iterations))
+                rospy.loginfo_throttle(0.5,"le temps moyen des fonctions rewiring sur une iteration est de : " + str(self.total_time_rewiring / self.nb_iterations))
                 self.nb_success += 1
             else:
                 self.nb_collisions += 1
-                #print("on a collisioné")
+                #print("on a collisione")
 
             '''if self.nb_collisions % 1000 ==0:
                 print(self.nb_collisions, " collisions")
@@ -573,7 +598,7 @@ class RRT(object):
         nearest_node = None
         min_d = infinity
 
-        #on va chercher dans les boules proche du noeud s'il y a d'autres points jusqu'à en trouver, (s'il y a beaucoup de point la recherche sera donc très rapide)
+        #on va chercher dans les boules proche du noeud s'il y a d'autres points jusqu'a en trouver, (s'il y a beaucoup de point la recherche sera donc tres rapide)
         x, y = sampled_point[0], sampled_point[1]
         w = len(self.bubbles_list[0])
         h = len(self.bubbles_list)
@@ -581,13 +606,13 @@ class RRT(object):
         i,j = int((y - self.occupancy_grid.info.origin.position.y)/(self.neighboor_dist)), int((x - self.occupancy_grid.info.origin.position.x)/(self.neighboor_dist))
         i,j = i - self.bubble_upper_corner_id[0], j - self.bubble_upper_corner_id[1]
 
-        #On va parcourir les bulles de façon concentrique autour du sampled_point jusqu'à trouver une boulle non vide
+        #On va parcourir les bulles de façon concentrique autour du sampled_point jusqu a trouver une boulle non vide
         for r in range(h + w):
             for l in range(-r, r+1):
                 k = r - abs(l)
                 if i+k >= 0 and i+k < h and j+l >= 0 and j+l < w:
                     for node in self.bubbles_list[i+k][j+l]:
-                        #print("on a trouvé un voisin dans la boule : ", i+k, j+l, "qui vaut : ", self.bubbles_list[i+k][j+l], " dans ", self.bubbles_list) 
+                        #print("on a trouve un voisin dans la boule : ", i+k, j+l, "qui vaut : ", self.bubbles_list[i+k][j+l], " dans ", self.bubbles_list) 
 
                         d = dist((node.x, node.y), sampled_point)
                         if d < min_d:
@@ -595,7 +620,7 @@ class RRT(object):
                             nearest_node = node
                 if i-k >= 0 and i-k < h and j+l >= 0 and j+l < w:
                     for node in self.bubbles_list[i-k][j+l]:
-                        #print("on a trouvé un voisin dans la boule : ", i-k, j+l, "qui vaut : ", self.bubbles_list[i-k][j+l], " dans ", self.bubbles_list) 
+                        #print("on a trouve un voisin dans la boule : ", i-k, j+l, "qui vaut : ", self.bubbles_list[i-k][j+l], " dans ", self.bubbles_list) 
 
                         d = dist((node.x, node.y), sampled_point)
                         if d < min_d:
@@ -700,7 +725,7 @@ class RRT(object):
         for x in range(dx + 1):
             x_cur, y_cur =  x0 + x*xx + y*yx, y0 + x*xy + y*yy
             index = y_cur * self.occupancy_grid.info.width + x_cur
-            if(self.occupancy_grid.data[index] > 60):
+            if(self.occupancy_grid.data[index] + self.local_grid.data[index]> 60):
                 return False
             if D >= 0:
                 y += 1
@@ -825,7 +850,7 @@ class RRT(object):
             for neighboor in buble:
                 #print("on a un voisin potentiel")
                 d = dist((node.x, node.y), (neighboor.x, neighboor.y))
-                if d < 0.0001:              #on evite de considérer le noeud lui même
+                if d < 0.0001:              #on evite de considerer le noeud lui meme
                     continue
                 if d < self.neighboor_dist:
                     neighborhood.append((neighboor, d))

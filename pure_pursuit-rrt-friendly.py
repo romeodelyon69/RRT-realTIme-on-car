@@ -17,7 +17,7 @@ from copy import copy
 # TODO: import ROS msg types and libraries
 
 p = 0.25
-max_velocity =7
+max_velocity = 1
 
 file_path = '/home/romeoNzt/wp-2025-01-17-23-01-38.csv'
 
@@ -27,7 +27,7 @@ class PurePursuit(object):
     """
     def __init__(self):
         # TODO: create ROS subscribers and publishers. Il faut pouvoir conduire, recuperer la position en fait le lidar ne doit pas etre necessaire
-        realCar = False
+        realCar = True
 
         if(realCar):
              lidarscan_topic = '/scan'
@@ -47,7 +47,7 @@ class PurePursuit(object):
 
         self.marker_pub = rospy.Publisher ("/dynamic_viz",Marker, queue_size=10)
 
-        self.L = 0.8
+        self.L = 0.4
         self.waypoint = []
         #self.waypoint = self.parse_waypoint(file_path)
 
